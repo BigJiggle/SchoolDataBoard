@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>School Dashboard</title>
-  <meta name="theme-color" content="#4f46e5">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M8 12l8-4 8 4-8 4z' fill='white'/%3E%3Cpath d='M11 14v5c0 1.5 2.2 3 5 3s5-1.5 5-3v-5' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+  <meta name="theme-color" content="#1f2227">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231f2227'/%3E%3Cpath d='M8 12l8-4 8 4-8 4z' fill='white'/%3E%3Cpath d='M11 14v5c0 1.5 2.2 3 5 3s5-1.5 5-3v-5' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -15,6 +15,7 @@
         <span class="brand-mark" aria-hidden="true"></span>
         <span class="brand-name">School<b>Board</b></span>
       </div>
+      <button class="nav-search" id="nav-search"><i data-icon="search"></i><span>Search</span><kbd>⌘K</kbd></button>
       <nav class="nav" id="nav">
         <a href="#dashboard" data-view="dashboard"><i data-icon="home"></i><span>Dashboard</span></a>
         <a href="#assignments" data-view="assignments"><i data-icon="list"></i><span>Assignments</span><em class="nav-badge" id="badge-todo"></em></a>
@@ -23,6 +24,7 @@
         <a href="#settings" data-view="settings"><i data-icon="settings"></i><span>Settings</span></a>
       </nav>
       <div class="sidebar-foot">
+        <button class="focus-pill" id="focus-pill" hidden></button>
         <button class="btn btn-ghost btn-block" id="sync-all"><i data-icon="refresh"></i><span>Sync all</span></button>
         <div class="muted small" id="last-sync"></div>
       </div>

@@ -13,10 +13,14 @@ One dashboard for all your schoolwork. It connects to the platforms your classes
   - **Calendar feed (any platform)**: paste an iCal link from Google Classroom, Blackboard, Brightspace (D2L), Schoology, Canvas, Moodle, Teams/Outlook, PowerSchool or anywhere else. The connect form shows where to find the link on each platform.
   - **Add by hand**: for paper handouts or anything your teacher said in class.
   - **Sample data**: try everything before connecting a real account.
-- **Dashboard**:
-  - overdue, due-today and next-7-days counts;
-  - an "Up next" list and today's study plan;
-  - a 7-day workload chart, progress for each class, and warnings when something won't fit.
+- **Interactive dashboard**:
+  - **Focus card**: suggests what to work on next (overdue first, then starred, then soonest due). Start a 15/25/45/60-minute focus timer, pause it, then finish it to log the time; the timer survives a page reload and shows in the sidebar while it runs. Use **Skip** to see the next suggestion.
+  - **Tiles that filter**: Overdue, Due today, Next 7 days and Done this week. Click a tile, a tab or a class chip to filter the list in place.
+  - **Quick add with plain-English dates**: type `Bio worksheet fri 5pm #Biology` and it fills in the due date and class.
+  - **Row actions**: tick something off (with **Undo**), start a focus session, log 15 minutes, or star it as a priority.
+  - **Interactive week strip**: click a day to see that day's study sessions and what's due.
+  - **Search and commands**: press **⌘K / Ctrl+K** (or `/`) to search assignments and jump anywhere. Press `n` to quick-add.
+- **Monotone design**: the whole app uses shades of one color. Pick the tone (Graphite, Slate, Ocean, Sage, Plum or Sepia) from the dashboard or Settings. Light and dark modes are both supported.
 - **Every assignment** opens a detail panel with:
   - **What to do**: the teacher's instructions, cleaned up and safe to display.
   - **How to submit**: file upload, text entry, link, recording, on paper, quiz, discussion, outside tool, with practical advice for each and the allowed file types. There's also a button that goes straight to the submission page.
@@ -37,7 +41,7 @@ One dashboard for all your schoolwork. It connects to the platforms your classes
   - When you open the dashboard, it re-syncs if the last sync is over 30 minutes old.
   - Your own notes, estimates and statuses are kept across syncs.
   - Anything you submit on Canvas is marked done automatically.
-- Light/dark mode, and works on a phone or iPad (bottom tab bar, list-style schedule).
+- Works on a phone or iPad (bottom tab bar, list-style schedule).
 
 | Schedule | Assignment detail |
 |---|---|

@@ -48,6 +48,7 @@ const ICONS = {
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
   question: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01"/>',
   play: '<path d="M7 4v16l13-8z"/>',
+  pause: '<path d="M8 5v14M16 5v14"/>',
 };
 const icon = (name, cls = "") => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.file}</svg>`;
 const hydrateIcons = (root = document) => root.querySelectorAll("i[data-icon]").forEach(el => { el.innerHTML = icon(el.dataset.icon); });
@@ -56,15 +57,14 @@ const CAT_ICON = { essay: "pen", lab: "flask", presentation: "slides", project: 
   reading: "book", problem_set: "calc", media: "video", vocab: "cards", general: "file" };
 const SUB_ICON = { upload: "upload", text: "text", url: "link", media: "video", paper: "paper", external_tool: "tool",
   quiz: "quiz", discussion: "chat", annotation: "edit", none: "x", unknown: "external" };
-const PLATFORM_STYLE = {
-  canvas: { color: "#e3242b", letter: "C" }, schoology: { color: "#0677bf", letter: "S" }, moodle: { color: "#f98012", letter: "M" },
-  ical: { color: "#7c3aed", letter: "" }, demo: { color: "#10b981", letter: "" }, manual: { color: "#64748b", letter: "" },
-};
-const PALETTE = ["#6366f1", "#ec4899", "#14b8a6", "#f59e0b", "#8b5cf6", "#0ea5e9", "#ef4444", "#22c55e", "#f97316", "#a855f7", "#06b6d4", "#84cc16"];
+const PLATFORM_LETTER = { canvas: "C", schoology: "S", moodle: "M" };
+const TONES = [["graphite", "Graphite"], ["slate", "Slate"], ["ocean", "Ocean"], ["sage", "Sage"], ["plum", "Plum"], ["sepia", "Sepia"]];
+const TONE_COUNT = 6;  // --tone-0 .. --tone-5 in styles.css
 
 // ------------------------------------------------------------------ state & helpers
 const S = { status: null, assignments: [], connections: [], settings: {}, plan: null, filter: "open", course: "", q: "",
-  weekStart: 0, schedMode: null, openId: null };
+  weekStart: 0, schedMode: null, openId: null, courseTone: {},
+  dash: { filter: "next", course: "", q: "", day: 0, limit: 8, focusSkip: 0, animated: false } };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -76,12 +76,19 @@ async function api(method, path, body) {
   return data;
 }
 
-function toast(msg, kind = "") {
+function toast(msg, kind = "", action) {
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
   el.textContent = msg;
+  if (action) {
+    const b = document.createElement("button");
+    b.className = "toast-action";
+    b.textContent = action.label;
+    b.addEventListener("click", () => { el.remove(); action.fn(); });
+    el.appendChild(b);
+  }
   $("#toasts").appendChild(el);
-  setTimeout(() => el.remove(), kind === "error" ? 6000 : 3200);
+  setTimeout(() => el.remove(), kind === "error" ? 6000 : action ? 5500 : 3200);
 }
 
 async function busy(btn, fn) {
@@ -92,12 +99,12 @@ async function busy(btn, fn) {
   finally { btn?.classList.remove("loading"); if (btn) btn.disabled = false; }
 }
 
-function colorFor(course) {
-  let h = 0;
-  for (const ch of course || "") h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return PALETTE[h % PALETTE.length];
+// Each class gets one shade of the theme's ink (in alphabetical order, so shades don't collide).
+function toneFor(course) {
+  return S.courseTone[course] ?? 0;
 }
-const courseChip = c => c ? `<span class="chip" style="color:${colorFor(c)};background:${colorFor(c)}1f"><span class="dot"></span>${esc(c)}</span>` : "";
+const toneVars = course => `--cc:var(--tone-${toneFor(course)});--cc-ink:var(--tone-${toneFor(course)}-ink)`;
+const courseChip = c => c ? `<span class="chip chip-course" style="${toneVars(c)}"><span class="dot"></span>${esc(c)}</span>` : "";
 
 const isDone = a => a.status === "done" || ["submitted", "graded"].includes(a.platform_status);
 const isOpen = a => !isDone(a) && a.status !== "hidden";
@@ -153,12 +160,18 @@ const sourceName = a => a.source_kind === "manual" ? "Added by me" : a.source_na
 async function loadAll() {
   const [status, assignments, connections] = await Promise.all([api("GET", "/api/status"), api("GET", "/api/assignments"), api("GET", "/api/connections")]);
   S.status = status; S.settings = status.settings; S.assignments = assignments; S.connections = connections;
+  assignTones();
   applyTheme();
   try { S.plan = await api("GET", "/api/schedule"); } catch { S.plan = null; }
   updateChrome();
 }
+function assignTones() {
+  const courses = [...new Set(S.assignments.map(a => a.course).filter(Boolean))].sort();
+  S.courseTone = Object.fromEntries(courses.map((c, i) => [c, i % TONE_COUNT]));
+}
 async function reloadAssignments() {
   S.assignments = await api("GET", "/api/assignments");
+  assignTones();
   try { S.plan = await api("GET", "/api/schedule"); } catch { /* keep the old plan */ }
   updateChrome();
 }
@@ -169,8 +182,17 @@ function updateChrome() {
   const syncs = S.connections.map(c => c.last_sync).filter(Boolean).sort();
   $("#last-sync").textContent = syncs.length ? `Synced ${relText(syncs[syncs.length - 1].replace(" ", "T"))}` : "";
 }
+function pref(key, fallback) {
+  try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+function setPref(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* private mode: keep it for this page only */ }
+}
 function applyTheme() {
-  const t = localStorage.getItem("theme") || "auto";
+  const tone = pref("tone", "graphite");
+  if (tone === "graphite") document.documentElement.removeAttribute("data-tone");
+  else document.documentElement.dataset.tone = tone;
+  const t = pref("theme", "auto");
   if (t === "auto") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.dataset.theme = t;
 }
@@ -189,10 +211,10 @@ window.addEventListener("hashchange", () => { render(); $("#main").focus({ preve
 // ------------------------------------------------------------------ shared pieces
 function rowHTML(a, opts = {}) {
   const done = isDone(a);
-  const cat = a.category || "general", color = colorFor(a.course);
-  return `<div class="row ${done ? "done" : ""}" data-open="${a.id}">
+  const cat = a.category || "general";
+  return `<div class="row ${done ? "done" : ""}" data-open="${a.id}" style="${toneVars(a.course)}">
     <button class="check ${done ? "on" : ""}" data-toggle="${a.id}" title="${done ? "Mark not done" : "Mark done"}" aria-label="Toggle done">${icon("check")}</button>
-    <div class="cat-icon" style="background:${color}1a;color:${color}">${icon(CAT_ICON[cat] || "file")}</div>
+    <div class="cat-icon">${icon(CAT_ICON[cat] || "file")}</div>
     <div class="row-main">
       <div class="row-title">${esc(a.title)}</div>
       <div class="row-meta">${courseChip(a.course)}${statusChip(a)}${a.priority === "high" ? `<span class="chip chip-amber">${icon("star")}Priority</span>` : ""}
@@ -202,6 +224,11 @@ function rowHTML(a, opts = {}) {
       <div class="due ${dueClass(a)}">${esc(dueText(a.due_at))}</div>
       <div class="muted small est">${a.due_at && !done ? esc(relText(a.due_at)) + " · " : ""}${esc(minutesLabel(a.est_minutes || a.suggested_minutes))}</div>
     </div>
+    ${opts.actions && !done ? `<div class="row-actions">
+      <button class="icon-btn" data-focus="${a.id}" title="Start a focus session">${icon("play")}</button>
+      <button class="icon-btn" data-quicklog="${a.id}" title="Log 15 minutes">+15</button>
+      <button class="icon-btn ${a.priority === "high" ? "on" : ""}" data-star="${a.id}" title="${a.priority === "high" ? "Remove priority" : "Prioritize"}">${icon("star")}</button>
+    </div>` : ""}
   </div>`;
 }
 function bindRows(root) {
@@ -210,14 +237,40 @@ function bindRows(root) {
     const a = S.assignments.find(x => x.id === +b.dataset.toggle);
     const next = isDone(a) ? "todo" : "done";
     if (["submitted", "graded"].includes(a.platform_status) && next === "todo") return toast("Your platform says this was submitted.");
+    const prev = a.status;
+    const row = b.closest(".row");
+    if (next === "done" && row) { b.classList.add("on"); row.classList.add("leaving"); }
     await busy(null, async () => {
       await api("PATCH", `/api/assignments/${a.id}`, { status: next });
       await reloadAssignments();
-      render();
-      if (next === "done") toast("Nice work! Marked done.");
+      setTimeout(render, next === "done" ? 260 : 0);
+      if (next === "done") toast(`Done: ${a.title}`, "", { label: "Undo", fn: () => busy(null, async () => {
+        await api("PATCH", `/api/assignments/${a.id}`, { status: prev === "done" ? "todo" : prev });
+        await reloadAssignments(); render();
+      }) });
     });
   }));
   root.querySelectorAll("[data-open]").forEach(r => r.addEventListener("click", () => openAssignment(+r.dataset.open)));
+  root.querySelectorAll("[data-quicklog]").forEach(b => b.addEventListener("click", ev => {
+    ev.stopPropagation();
+    busy(b, async () => {
+      const r = await api("POST", `/api/assignments/${b.dataset.quicklog}/progress`, { minutes: 15 });
+      await reloadAssignments(); render();
+      toast(r.work_left ? `Logged 15 min. About ${minutesLabel(r.work_left)} to go.` : "Logged. That's the whole estimate!");
+    });
+  }));
+  root.querySelectorAll("[data-star]").forEach(b => b.addEventListener("click", ev => {
+    ev.stopPropagation();
+    const a = S.assignments.find(x => x.id === +b.dataset.star);
+    busy(b, async () => {
+      await api("PATCH", `/api/assignments/${a.id}`, { priority: a.priority === "high" ? "normal" : "high" });
+      await reloadAssignments(); render();
+    });
+  }));
+  root.querySelectorAll("[data-focus]").forEach(b => b.addEventListener("click", ev => {
+    ev.stopPropagation();
+    focusStart(+b.dataset.focus);
+  }));
 }
 
 function emptyConnect() {
@@ -238,134 +291,220 @@ function bindConnectButtons(root) {
 }
 
 // ------------------------------------------------------------------ dashboard
+const DASH_FILTERS = [["next", "Up next"], ["overdue", "Overdue"], ["today", "Today"], ["week", "Next 7 days"], ["done", "Done"]];
+
+function dashSets() {
+  const now = new Date();
+  const all = S.assignments.filter(a => a.status !== "hidden");
+  const open = all.filter(isOpen).sort((a, b) => (a.due_at || "9") < (b.due_at || "9") ? -1 : 1);
+  const left = a => Math.max(0, (a.est_minutes || a.suggested_minutes || 0) - (a.progress_minutes || 0));
+  const sets = {
+    next: open,
+    overdue: open.filter(a => a.due_at && new Date(a.due_at) < now),
+    today: open.filter(a => a.due_at && new Date(a.due_at) >= now && dayDiff(new Date(a.due_at), now) === 0),
+    week: open.filter(a => a.due_at && new Date(a.due_at) >= now && dayDiff(new Date(a.due_at), now) < 7),
+    done: all.filter(a => isDone(a) && a.due_at && Math.abs(dayDiff(new Date(a.due_at), now)) < 7)
+      .sort((a, b) => a.due_at < b.due_at ? 1 : -1),
+  };
+  const work = list => list.reduce((s, a) => s + left(a), 0);
+  return { all, open, sets, work, left };
+}
+
+// The task the focus card suggests: overdue first, then starred, then soonest due.
+function focusCandidates(open) {
+  const now = new Date();
+  const rank = a => (a.due_at && new Date(a.due_at) < now ? 0 : a.priority === "high" ? 1 : 2);
+  return open.slice().sort((a, b) => rank(a) - rank(b) || ((a.due_at || "9") < (b.due_at || "9") ? -1 : 1));
+}
+
 function renderDashboard() {
   const main = $("#main");
-  const all = S.assignments.filter(a => a.status !== "hidden");
-  const open = all.filter(isOpen);
-  const now = new Date();
-  const overdue = open.filter(a => a.due_at && new Date(a.due_at) < now);
-  const today = open.filter(a => a.due_at && new Date(a.due_at) >= now && dayDiff(new Date(a.due_at), now) === 0);
-  const week = open.filter(a => a.due_at && new Date(a.due_at) >= now && dayDiff(new Date(a.due_at), now) < 7);
+  const { all, open, sets, work, left } = dashSets();
+  const D = S.dash, now = new Date();
   const weekAll = all.filter(a => a.due_at && Math.abs(dayDiff(new Date(a.due_at), now)) < 7);
-  const doneWeek = weekAll.filter(isDone).length;
-  const pct = weekAll.length ? Math.round(doneWeek / weekAll.length * 100) : 0;
+  const pct = weekAll.length ? Math.round(weekAll.filter(isDone).length / weekAll.length * 100) : 0;
   const hour = now.getHours();
   const hello = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const name = S.settings.student_name ? `, ${esc(S.settings.student_name)}` : "";
-  const workLeft = open.filter(a => a.due_at && dayDiff(new Date(a.due_at), now) < 7)
-    .reduce((s, a) => s + Math.max(0, (a.est_minutes || a.suggested_minutes || 0) - (a.progress_minutes || 0)), 0);
+  let headline = "You're all caught up.";
+  if (sets.overdue.length) headline = `${sets.overdue.length} overdue ${sets.overdue.length === 1 ? "item" : "items"} to clear first.`;
+  else if (sets.today.length) headline = `${sets.today.length} due today. You've got this.`;
+  else if (sets.week.length) headline = `${sets.week.length} due this week, about ${minutesLabel(work(sets.week))} of work.`;
 
-  let headline = "You're all caught up. 🎉";
-  if (overdue.length) headline = `${overdue.length} overdue ${overdue.length === 1 ? "item needs" : "items need"} attention first.`;
-  else if (today.length) headline = `${today.length} due today. You've got this.`;
-  else if (week.length) headline = `${week.length} due in the next 7 days, about ${minutesLabel(workLeft)} of work.`;
-
-  const upNext = open.slice().sort((a, b) => (a.due_at || "9") < (b.due_at || "9") ? -1 : 1).slice(0, 8);
+  const cands = focusCandidates(open);
+  const f = focusState();
+  const focusTask = f ? S.assignments.find(a => a.id === f.id) : cands[D.focusSkip % Math.max(1, cands.length)];
+  const tiles = [
+    ["overdue", "Overdue", sets.overdue, "flame"], ["today", "Due today", sets.today, "clock"],
+    ["week", "Next 7 days", sets.week, "target"], ["done", "Done this week", sets.done, "trophy"],
+  ];
 
   main.innerHTML = `
-    <div class="hero">
-      <div class="hero-row">
-        <div>
-          <div class="small" style="opacity:.85;font-weight:600">${esc(now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }))}</div>
-          <h1>${hello}${name}</h1>
-          <p>${headline}</p>
-          <div class="actions">
-            <a class="btn btn-sm" href="#schedule" style="background:rgba(255,255,255,.18);border-color:transparent;color:#fff">${icon("calendar")}My plan</a>
-            <button class="btn btn-sm" id="hero-sync" style="background:rgba(255,255,255,.18);border-color:transparent;color:#fff">${icon("refresh")}Sync now</button>
-          </div>
-        </div>
-        <div class="ring" style="--p:${pct}" title="Completed this week"><span>${pct}%<small>this week</small></span></div>
+    <div class="dash-top">
+      <div>
+        <div class="eyebrow">${esc(now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }))}</div>
+        <h1>${hello}${name}</h1>
+        <div class="sub">${headline}</div>
+      </div>
+      <div class="dash-tools">
+        <button class="btn btn-ghost search-btn" id="open-palette">${icon("search")}<span>Search</span><kbd>⌘K</kbd></button>
+        <div class="tone-dots" role="radiogroup" aria-label="Color tone">${TONES.map(([k, l]) =>
+          `<button class="tone-dot ${pref("tone", "graphite") === k ? "on" : ""}" data-tone="${k}" title="${l}" aria-label="${l} tone" role="radio"></button>`).join("")}</div>
+        <button class="btn" id="hero-sync">${icon("refresh")}<span>Sync</span></button>
       </div>
     </div>
     ${S.connections.length ? "" : emptyConnect()}
-    <div class="stats">
-      ${statCard("red", "flame", overdue.length, "Overdue", "overdue")}
-      ${statCard("amber", "clock", today.length, "Due today", "today")}
-      ${statCard("blue", "target", week.length, "Next 7 days", "week")}
-      ${statCard("green", "trophy", doneWeek, "Done this week", "done")}
-    </div>
-    <div class="grid grid-dash">
-      <div class="stack">
-        <div class="card">
-          <div class="card-head"><h2>Up next</h2><a href="#assignments" class="small">View all →</a></div>
-          <div class="card-body list" id="upnext">${upNext.length ? upNext.map(a => rowHTML(a)).join("") :
-            `<div class="empty">${icon("trophy")}<h3>Nothing on your list</h3><p>Sync, or add something yourself.</p></div>`}</div>
+
+    <section class="focus" id="focus-card">${focusHTML(focusTask, cands.length, pct, left)}</section>
+
+    <div class="tiles">${tiles.map(([k, label, list, ic]) => `
+      <button class="tile ${D.filter === k ? "on" : ""}" data-tile="${k}" aria-pressed="${D.filter === k}">
+        <span class="tile-icon">${icon(ic)}</span>
+        <span class="tile-num" data-count="${list.length}">${D.animated ? list.length : 0}</span>
+        <span class="tile-label">${label}</span>
+        <span class="tile-sub">${k === "done" ? `${pct}% of this week` : list.length ? `≈ ${minutesLabel(work(list))}` : "nothing"}</span>
+      </button>`).join("")}</div>
+
+    <div class="dash-grid">
+      <div class="card list-card">
+        <div class="list-head">
+          <div class="seg" id="dash-filter">${DASH_FILTERS.map(([k, l]) => `<button data-f="${k}" class="${D.filter === k ? "on" : ""}">${l}<span class="seg-count">${sets[k].length}</span></button>`).join("")}</div>
         </div>
-        <div class="card">
-          <div class="card-head"><h2>Workload, next 7 days</h2><span class="muted small">${minutesLabel(workLeft) || "0 min"} left</span></div>
-          <div class="card-body">${workloadChart(open)}</div>
+        <form class="quick-add" id="quick-add" autocomplete="off">
+          ${icon("plus")}
+          <input id="qa-input" placeholder="Add a task… try “Bio worksheet fri 5pm #Biology”" aria-label="Quick add">
+          <span class="qa-preview" id="qa-preview"></span>
+          <button class="btn btn-primary btn-sm" id="qa-btn">Add</button>
+        </form>
+        <div class="class-chips" id="class-chips">
+          <button class="cchip ${D.course ? "" : "on"}" data-course="">All classes</button>
+          ${Object.keys(S.courseTone).map(c => `<button class="cchip ${D.course === c ? "on" : ""}" data-course="${esc(c)}" style="${toneVars(c)}"><span class="dot"></span>${esc(c)}</button>`).join("")}
         </div>
+        <div class="list" id="dash-list"></div>
       </div>
+
       <div class="stack">
         <div class="card">
-          <div class="card-head"><h2>Today's plan</h2><a href="#schedule" class="small">Schedule →</a></div>
-          <div class="card-body">${todayPlan()}</div>
+          <div class="card-head"><h2>This week</h2><a href="#schedule" class="small">Full schedule →</a></div>
+          <div class="card-body">
+            <div class="week-strip" id="week-strip"></div>
+            <div id="day-detail"></div>
+          </div>
         </div>
         ${S.plan && S.plan.warnings.filter(w => w.severity === "high").length ? `<div class="card">
           <div class="card-head"><h2>Heads up</h2></div>
           <div class="card-body">${warningsHTML(S.plan.warnings.filter(w => w.severity === "high").slice(0, 4))}</div></div>` : ""}
         <div class="card">
-          <div class="card-head"><h2>Classes</h2></div>
+          <div class="card-head"><h2>Classes</h2><span class="muted small">tap to filter</span></div>
           <div class="card-body">${coursesHTML(all)}</div>
         </div>
       </div>
     </div>`;
-  bindRows(main);
+
+  drawDashList();
+  drawWeekStrip();
+  bindFocus();
   bindConnectButtons(main);
-  main.querySelectorAll("[data-stat]").forEach(el => el.addEventListener("click", () => {
-    S.filter = el.dataset.stat === "done" ? "done" : el.dataset.stat === "overdue" ? "overdue" : "open";
-    location.hash = "assignments";
-  }));
-  main.querySelectorAll("[data-plan]").forEach(el => el.addEventListener("click", () => openAssignment(+el.dataset.plan)));
   bindWarnings(main);
   $("#hero-sync").addEventListener("click", e => syncAll(e.currentTarget));
+  $("#open-palette").addEventListener("click", openPalette);
+  main.querySelectorAll("[data-tone]").forEach(b => b.addEventListener("click", () => {
+    setPref("tone", b.dataset.tone); applyTheme();
+    main.querySelectorAll("[data-tone]").forEach(x => x.classList.toggle("on", x === b));
+  }));
+  main.querySelectorAll("[data-tile]").forEach(t => t.addEventListener("click", () => setDashFilter(t.dataset.tile === D.filter ? "next" : t.dataset.tile)));
+  $("#dash-filter").addEventListener("click", e => { const k = e.target.closest("[data-f]")?.dataset.f; if (k) setDashFilter(k); });
+  main.querySelectorAll("[data-course]").forEach(b => b.addEventListener("click", () => setDashCourse(b.dataset.course)));
+  bindQuickAdd();
+  if (!D.animated) { countUp(main); D.animated = true; }
 }
-function statCard(color, ic, num, label, key) {
-  return `<div class="card stat ${color}" data-stat="${key}" role="button" tabindex="0">
-    <div class="stat-icon">${icon(ic)}</div><div><div class="stat-num">${num}</div><div class="stat-label">${label}</div></div></div>`;
+
+function setDashFilter(k) {
+  S.dash.filter = k; S.dash.limit = 8;
+  document.querySelectorAll("[data-tile]").forEach(t => { t.classList.toggle("on", t.dataset.tile === k); t.setAttribute("aria-pressed", t.dataset.tile === k); });
+  document.querySelectorAll("#dash-filter [data-f]").forEach(b => b.classList.toggle("on", b.dataset.f === k));
+  drawDashList();
 }
-function workloadChart(open) {
-  const days = [];
-  const planned = {};
-  (S.plan?.per_day || []).forEach(d => { planned[d.date] = d.minutes; });
-  for (let i = 0; i < 7; i++) {
-    const d = startOfDay(new Date()); d.setDate(d.getDate() + i);
-    const items = open.filter(a => a.due_at && dayDiff(new Date(a.due_at), d) === 0);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    days.push({ d, count: items.length, plan: planned[key] || 0 });
-  }
-  const maxPlan = Math.max(60, ...days.map(x => x.plan));
-  return `<div class="bars">${days.map((x, i) => `<div class="bar" title="${x.count} due · ${minutesLabel(x.plan) || "nothing"} planned">
-      <span class="bar-num">${x.count || ""}</span>
-      <div class="bar-col" style="height:${Math.max(4, x.plan / maxPlan * 100)}%"><div class="seg-plan" style="height:100%"></div></div>
-      <span class="bar-label ${i === 0 ? "today" : ""}">${i === 0 ? "Today" : x.d.toLocaleDateString([], { weekday: "short" })}</span>
-    </div>`).join("")}</div>
-    <div class="legend"><span><i style="background:var(--accent)"></i>Planned study time</span><span><b style="color:var(--text-2)">#</b> items due</span></div>`;
+function setDashCourse(c) {
+  S.dash.course = S.dash.course === c ? "" : c; S.dash.limit = 8;
+  document.querySelectorAll("#class-chips [data-course]").forEach(b => b.classList.toggle("on", b.dataset.course === S.dash.course));
+  document.querySelectorAll(".course-row[data-course]").forEach(b => b.classList.toggle("on", b.dataset.course === S.dash.course));
+  drawDashList();
 }
-function todayPlan() {
-  if (!S.plan) return `<div class="muted">No plan yet.</div>`;
-  const today = S.plan.blocks.filter(b => dayDiff(new Date(b.start), new Date()) === 0);
-  if (!today.length) {
-    const next = S.plan.blocks[0];
-    return `<div class="empty" style="padding:14px">${icon("calendar")}<h3>Nothing planned for today</h3>
-      <p>${next ? `Next session: <b>${esc(fmtDay(new Date(next.start)))} ${esc(fmtTime(new Date(next.start)))}</b>, ${esc(next.title)}` : "Add free time in Schedule to get a plan."}</p></div>`;
-  }
-  return today.map(b => `<div class="plan-item" data-plan="${b.assignment_id}">
-      <div class="plan-time">${esc(fmtTime(new Date(b.start)))}<small>${esc(minutesLabel(b.minutes))}</small></div>
-      <div class="plan-bar" style="background:${colorFor(b.course)}"></div>
-      <div class="plan-body"><div class="t">${esc(b.title)}</div><div class="muted small">${esc(b.course)}${b.parts > 1 ? ` · part ${b.part} of ${b.parts}` : ""}</div></div>
-    </div>`).join("");
+
+function drawDashList() {
+  const box = $("#dash-list");
+  if (!box) return;
+  const { sets } = dashSets();
+  const D = S.dash;
+  const list = sets[D.filter].filter(a => !D.course || a.course === D.course);
+  const shown = list.slice(0, D.limit);
+  const label = DASH_FILTERS.find(([k]) => k === D.filter)[1].toLowerCase();
+  box.innerHTML = shown.length ? shown.map(a => rowHTML(a, { actions: true })).join("") +
+    (list.length > shown.length ? `<button class="btn btn-ghost btn-block more-btn" id="dash-more">Show ${Math.min(8, list.length - shown.length)} more of ${list.length - shown.length}</button>` : "")
+    : `<div class="empty">${icon(D.filter === "done" ? "trophy" : "check")}<h3>${D.filter === "done" ? "Nothing finished yet this week" : `Nothing ${label === "up next" ? "to do" : label}`}${D.course ? ` in ${esc(D.course)}` : ""}</h3>
+       <p>${D.filter === "done" ? "Tick something off and it shows up here." : "Enjoy it, or add a task above."}</p></div>`;
+  box.querySelectorAll(".row").forEach((r, i) => r.style.setProperty("--i", i));
+  bindRows(box);
+  hydrateIcons(box);
+  $("#dash-more")?.addEventListener("click", () => { D.limit += 8; drawDashList(); });
 }
+
+function drawWeekStrip() {
+  const strip = $("#week-strip");
+  if (!strip) return;
+  const D = S.dash, today = startOfDay(new Date());
+  const planned = Object.fromEntries((S.plan?.per_day || []).map(d => [d.date, d.minutes]));
+  const key = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const days = [...Array(7)].map((_, i) => {
+    const d = new Date(today); d.setDate(d.getDate() + i);
+    const due = S.assignments.filter(a => a.status !== "hidden" && a.due_at && dayDiff(new Date(a.due_at), d) === 0);
+    return { d, i, due, open: due.filter(isOpen).length, plan: planned[key(d)] || 0 };
+  });
+  const max = Math.max(60, ...days.map(x => x.plan));
+  strip.innerHTML = days.map(x => `<button class="wday ${D.day === x.i ? "on" : ""}" data-day="${x.i}" title="${minutesLabel(x.plan) || "No study"} planned · ${x.due.length} due">
+      <span class="wd-name">${x.i === 0 ? "Today" : esc(x.d.toLocaleDateString([], { weekday: "short" }))}</span>
+      <span class="wd-num">${x.d.getDate()}</span>
+      <span class="wd-bar"><span style="height:${x.plan / max * 100}%"></span></span>
+      <span class="wd-dots">${x.due.slice(0, 4).map(a => `<i class="${isOpen(a) ? "" : "done"}"></i>`).join("")}</span>
+    </button>`).join("");
+  strip.querySelectorAll("[data-day]").forEach(b => b.addEventListener("click", () => {
+    D.day = +b.dataset.day;
+    strip.querySelectorAll("[data-day]").forEach(x => x.classList.toggle("on", x === b));
+    drawDayDetail(days[D.day]);
+  }));
+  drawDayDetail(days[D.day]);
+}
+
+function drawDayDetail(x) {
+  const box = $("#day-detail");
+  const blocks = (S.plan?.blocks || []).filter(b => dayDiff(new Date(b.start), x.d) === 0);
+  const name = x.i === 0 ? "Today" : x.i === 1 ? "Tomorrow" : x.d.toLocaleDateString([], { weekday: "long" });
+  box.innerHTML = `
+    <div class="day-head"><b>${esc(name)}</b><span class="muted small">${minutesLabel(blocks.reduce((s, b) => s + b.minutes, 0)) || "no study"} planned · ${x.due.length} due</span></div>
+    ${blocks.length ? `<div class="day-sec">Study plan</div>` + blocks.map(b => `<div class="plan-item" data-plan="${b.assignment_id}" style="${toneVars(b.course)}">
+        <div class="plan-time">${esc(fmtTime(new Date(b.start)))}<small>${esc(minutesLabel(b.minutes))}</small></div>
+        <div class="plan-bar"></div>
+        <div class="plan-body"><div class="t">${esc(b.title)}</div><div class="muted small">${esc(b.course)}${b.parts > 1 ? ` · part ${b.part} of ${b.parts}` : ""}</div></div>
+        ${x.i === 0 ? `<button class="icon-btn" data-focus="${b.assignment_id}" title="Start focus">${icon("play")}</button>` : ""}
+      </div>`).join("") : ""}
+    ${x.due.length ? `<div class="day-sec">Due</div>` + x.due.map(a => `<div class="due-item ${isOpen(a) ? "" : "done"}" data-plan="${a.id}">
+        <span class="due-time">${esc(fmtTime(new Date(a.due_at)))}</span><span class="t">${esc(a.title)}</span>${isOpen(a) ? "" : icon("check")}</div>`).join("") : ""}
+    ${!blocks.length && !x.due.length ? `<div class="empty" style="padding:16px 8px">${icon("calendar")}<p>A free day.</p></div>` : ""}`;
+  box.querySelectorAll("[data-plan]").forEach(el => el.addEventListener("click", () => openAssignment(+el.dataset.plan)));
+  box.querySelectorAll("[data-focus]").forEach(b => b.addEventListener("click", ev => { ev.stopPropagation(); focusStart(+b.dataset.focus); }));
+  hydrateIcons(box);
+}
+
 function coursesHTML(all) {
   const by = {};
   all.forEach(a => { const c = a.course || "Other"; (by[c] ||= { total: 0, done: 0, open: 0 }); by[c].total++; if (isDone(a)) by[c].done++; else by[c].open++; });
   const rows = Object.entries(by).sort((a, b) => b[1].open - a[1].open);
   if (!rows.length) return `<div class="muted">Your classes appear here after syncing.</div>`;
-  return rows.map(([c, v]) => `<div class="course-row">
-      <span class="chip" style="color:${colorFor(c)};background:${colorFor(c)}1f;padding:4px"><span class="dot"></span></span>
-      <span class="name">${esc(c)}</span><span class="muted small">${v.open} to do</span>
-      <div class="progress" title="${v.done}/${v.total} done"><span style="width:${v.total ? v.done / v.total * 100 : 0}%;background:${colorFor(c)}"></span></div>
-    </div>`).join("");
+  return rows.map(([c, v]) => `<button class="course-row ${S.dash.course === c ? "on" : ""}" data-course="${esc(c === "Other" ? "" : c)}" style="${toneVars(c)}">
+      <span class="dot"></span><span class="name">${esc(c)}</span><span class="muted small">${v.open} to do</span>
+      <span class="progress" title="${v.done}/${v.total} done"><span style="width:${v.total ? v.done / v.total * 100 : 0}%"></span></span>
+    </button>`).join("");
 }
 function warningsHTML(ws) {
   return ws.map(w => `<div class="warn-item ${w.severity}" data-warn="${w.assignment_id}">${icon("alert")}
@@ -374,6 +513,275 @@ function warningsHTML(ws) {
 function bindWarnings(root) {
   root.querySelectorAll("[data-warn]").forEach(el => el.addEventListener("click", () => openAssignment(+el.dataset.warn)));
 }
+
+function countUp(root) {
+  root.querySelectorAll("[data-count]").forEach(el => {
+    const target = +el.dataset.count, t0 = performance.now(), dur = 650;
+    const step = t => {
+      const k = Math.min(1, (t - t0) / dur);
+      el.textContent = Math.round(target * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+// ------------------------------------------------------------------ quick add
+// "Bio worksheet fri 5pm #Biology" -> title "Bio worksheet", due Friday 5:00 PM, class Biology.
+const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+function parseQuick(text) {
+  let rest = ` ${text} `, day = null, time = null, course = "";
+  const take = re => { const m = rest.match(re); if (m) rest = rest.replace(m[0], " "); return m; };
+  let m = take(/\s#([\w&.-]+(?:_[\w&.-]+)*)/);
+  if (m) {
+    const want = m[1].replace(/_/g, " ").toLowerCase();
+    course = Object.keys(S.courseTone).find(c => c.toLowerCase().startsWith(want)) ||
+             Object.keys(S.courseTone).find(c => c.toLowerCase().includes(want)) || m[1].replace(/_/g, " ");
+  }
+  const today = startOfDay(new Date());
+  if ((m = take(/\s(today|tonight)\b/i))) day = today;
+  else if ((m = take(/\s(tomorrow|tmrw|tmr|tmw)\b/i))) { day = new Date(today); day.setDate(day.getDate() + 1); }
+  else if ((m = take(/\sin\s+(\d{1,2})\s+days?\b/i))) { day = new Date(today); day.setDate(day.getDate() + +m[1]); }
+  else if ((m = take(/\s(?:on\s+|by\s+|due\s+)?(next\s+)?(sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat)[a-z]*\b/i))) {
+    const want = WEEKDAYS.indexOf(m[2].slice(0, 3).toLowerCase());
+    day = new Date(today);
+    let add = (want - day.getDay() + 7) % 7;
+    if (m[1]) add += add === 0 ? 7 : 7;
+    day.setDate(day.getDate() + add);
+  } else if ((m = take(/\s(\d{1,2})\/(\d{1,2})\b/))) {
+    day = new Date(today.getFullYear(), +m[1] - 1, +m[2]);
+    if (day < today) day.setFullYear(day.getFullYear() + 1);
+  } else if ((m = take(/\s(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b/i))) {
+    day = new Date(today.getFullYear(), MONTHS.indexOf(m[1].toLowerCase()), +m[2]);
+    if (day < today) day.setFullYear(day.getFullYear() + 1);
+  }
+  if ((m = take(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i))) {
+    let h = +m[1] % 12; if (m[3].toLowerCase() === "pm") h += 12;
+    time = [h, +(m[2] || 0)];
+  } else if ((m = take(/\s(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)\b/))) time = [+m[1], +m[2]];
+  if (time && !day) day = today;
+  let due = null;
+  if (day) { due = new Date(day); if (time) due.setHours(time[0], time[1], 0, 0); else due.setHours(23, 59, 0, 0); }
+  if (due && due < new Date() && !time && dayDiff(due, new Date()) === 0) due.setHours(23, 59);
+  return { title: rest.replace(/\s+(due|by|on|at)\s*$/i, "").replace(/\s+/g, " ").trim(), due, course };
+}
+function bindQuickAdd() {
+  const input = $("#qa-input"), prev = $("#qa-preview");
+  input.addEventListener("input", () => {
+    const p = parseQuick(input.value);
+    prev.innerHTML = input.value.trim() ? [p.due ? `${icon("clock")}${esc(dueText(p.due.toISOString()))}` : "", p.course ? `#${esc(p.course)}` : ""].filter(Boolean).join(" · ") : "";
+    prev.classList.toggle("show", !!prev.innerHTML);
+  });
+  $("#quick-add").addEventListener("submit", e => {
+    e.preventDefault();
+    const p = parseQuick(input.value);
+    if (!p.title) return input.focus();
+    busy($("#qa-btn"), async () => {
+      const a = await api("POST", "/api/assignments", { title: p.title, course: p.course, due_at: p.due ? p.due.toISOString() : null });
+      await reloadAssignments();
+      S.dash.filter = "next";
+      render();
+      $("#qa-input")?.focus();
+      toast(`Added “${a.title}”${p.due ? `, due ${dueText(a.due_at)}` : ""}.`, "", { label: "Open", fn: () => openAssignment(a.id) });
+    });
+  });
+}
+
+// ------------------------------------------------------------------ focus timer
+// One session at a time, kept in localStorage so it survives reloads: {id, minutes, startedAt|null, elapsed}.
+function focusState() {
+  try { return JSON.parse(pref("focus", "null")); } catch { return null; }
+}
+function saveFocus(f) { if (f) setPref("focus", JSON.stringify(f)); else { try { localStorage.removeItem("focus"); } catch { /* ignore */ } } }
+function focusElapsed(f) { return f.elapsed + (f.startedAt ? Date.now() - f.startedAt : 0); }
+const focusMinutes = () => +pref("focusMinutes", "25");
+
+function focusStart(id, minutes = focusMinutes()) {
+  const cur = focusState();
+  if (cur && cur.id !== id && focusElapsed(cur) > 60000 && !confirm("Stop the current focus session? Its time will be logged.")) return;
+  if (cur && cur.id !== id) focusFinish(false);
+  saveFocus({ id, minutes, startedAt: Date.now(), elapsed: 0 });
+  if (currentView() !== "dashboard") location.hash = "dashboard"; else redrawFocus();
+  tick();
+}
+function focusPause() {
+  const f = focusState(); if (!f) return;
+  if (f.startedAt) { f.elapsed += Date.now() - f.startedAt; f.startedAt = null; } else f.startedAt = Date.now();
+  saveFocus(f); redrawFocus(); tick();
+}
+async function focusFinish(announce = true) {
+  const f = focusState(); if (!f) return;
+  saveFocus(null);
+  const mins = Math.round(focusElapsed(f) / 60000);
+  document.title = "School Dashboard";
+  if (mins >= 1) {
+    try {
+      const r = await api("POST", `/api/assignments/${f.id}/progress`, { minutes: mins });
+      await reloadAssignments();
+      if (announce) toast(`Logged ${minutesLabel(mins)} on “${r.title}”.${r.work_left ? ` About ${minutesLabel(r.work_left)} to go.` : " That covers the estimate!"}`, "",
+        r.work_left ? null : { label: "Mark done", fn: () => busy(null, async () => { await api("PATCH", `/api/assignments/${f.id}`, { status: "done" }); await reloadAssignments(); render(); }) });
+    } catch (e) { toast(e.message, "error"); }
+  } else if (announce) toast("Session cancelled.");
+  render();
+}
+
+function focusHTML(task, count, pct, left) {
+  const f = focusState();
+  if (!task) {
+    return `<div class="focus-main"><div class="eyebrow">Focus</div><h2>Nothing to focus on</h2>
+      <p class="focus-sub">Add a task or sync your classes to get a suggestion.</p></div>
+      <div class="focus-ring" style="--p:${pct}"><svg viewBox="0 0 120 120"><circle class="trk" cx="60" cy="60" r="52"/><circle class="val" cx="60" cy="60" r="52" pathLength="100"/></svg>
+      <div class="ring-label"><b>${pct}%</b><small>this week</small></div></div>`;
+  }
+  const running = f && f.id === task.id;
+  const total = (running ? f.minutes : focusMinutes()) * 60000;
+  const remain = running ? Math.max(0, total - focusElapsed(f)) : total;
+  const p = running ? Math.min(100, focusElapsed(f) / total * 100) : pct;
+  return `
+    <div class="focus-main">
+      <div class="eyebrow">${running ? (f.startedAt ? "Focusing" : "Paused") : "Suggested next"}${!running && count > 1 ? ` · ${S.dash.focusSkip % count + 1} of ${count}` : ""}</div>
+      <h2 class="focus-title" data-open="${task.id}">${esc(task.title)}</h2>
+      <div class="focus-meta">${courseChip(task.course)}
+        <span class="due ${dueClass(task)}">${icon("clock")}<span data-live-due="${esc(task.due_at || "")}">${task.due_at ? `${esc(dueText(task.due_at))} · ${esc(relText(task.due_at))}` : "No due date"}</span></span>
+        <span>${icon("target")}${minutesLabel(left(task)) || "estimate done"} left</span></div>
+      <div class="focus-actions">
+        ${running ? `
+          <button class="btn btn-invert" id="f-pause">${icon(f.startedAt ? "pause" : "play")}${f.startedAt ? "Pause" : "Resume"}</button>
+          <button class="btn btn-outline" id="f-finish">${icon("check")}Finish & log</button>
+          <button class="btn btn-quiet" id="f-cancel">Cancel</button>`
+        : `
+          <button class="btn btn-invert" id="f-start">${icon("play")}Start focus</button>
+          <div class="seg seg-dark" id="f-len">${[15, 25, 45, 60].map(m => `<button data-min="${m}" class="${focusMinutes() === m ? "on" : ""}">${m}m</button>`).join("")}</div>
+          ${count > 1 ? `<button class="btn btn-quiet" id="f-skip">Skip ${icon("right")}</button>` : ""}
+          <button class="btn btn-quiet" id="f-open">Details</button>`}
+      </div>
+    </div>
+    <div class="focus-ring ${running ? "live" : ""}" style="--p:${p}">
+      <svg viewBox="0 0 120 120"><circle class="trk" cx="60" cy="60" r="52"/><circle class="val" cx="60" cy="60" r="52" pathLength="100"/></svg>
+      <div class="ring-label">${running ? `<b data-timer>${fmtClock(remain)}</b><small>${f.startedAt ? "remaining" : "paused"}</small>` : `<b>${pct}%</b><small>done this week</small>`}</div>
+    </div>`;
+}
+const fmtClock = ms => { const s = Math.ceil(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+function redrawFocus() {
+  const card = $("#focus-card");
+  if (!card) return;
+  const { open, left } = dashSets();
+  const f = focusState(), cands = focusCandidates(open);
+  const task = f ? S.assignments.find(a => a.id === f.id) : cands[S.dash.focusSkip % Math.max(1, cands.length)];
+  const all = S.assignments.filter(a => a.status !== "hidden"), now = new Date();
+  const weekAll = all.filter(a => a.due_at && Math.abs(dayDiff(new Date(a.due_at), now)) < 7);
+  const pct = weekAll.length ? Math.round(weekAll.filter(isDone).length / weekAll.length * 100) : 0;
+  card.innerHTML = focusHTML(task, cands.length, pct, left);
+  hydrateIcons(card);
+  bindFocus();
+}
+function bindFocus() {
+  const card = $("#focus-card");
+  if (!card) return;
+  card.querySelector("[data-open]")?.addEventListener("click", e => openAssignment(+e.currentTarget.dataset.open));
+  $("#f-open")?.addEventListener("click", () => openAssignment(+card.querySelector("[data-open]").dataset.open));
+  $("#f-start")?.addEventListener("click", () => focusStart(+card.querySelector("[data-open]").dataset.open));
+  $("#f-skip")?.addEventListener("click", () => { S.dash.focusSkip++; redrawFocus(); });
+  $("#f-pause")?.addEventListener("click", focusPause);
+  $("#f-finish")?.addEventListener("click", () => focusFinish());
+  $("#f-cancel")?.addEventListener("click", () => { saveFocus(null); document.title = "School Dashboard"; redrawFocus(); updateFocusPill(); });
+  $("#f-len")?.addEventListener("click", e => {
+    const m = e.target.closest("[data-min]")?.dataset.min; if (!m) return;
+    setPref("focusMinutes", m); redrawFocus();
+  });
+}
+function updateFocusPill() {
+  const pill = $("#focus-pill"), f = focusState();
+  if (!f) { pill.hidden = true; return; }
+  const a = S.assignments.find(x => x.id === f.id);
+  const remain = Math.max(0, f.minutes * 60000 - focusElapsed(f));
+  pill.hidden = false;
+  pill.innerHTML = `<span class="pulse ${f.startedAt ? "" : "paused"}"></span><b>${fmtClock(remain)}</b><span class="pill-title">${esc(a?.title || "Focus")}</span>`;
+}
+let tickTimer = null;
+function tick() {
+  clearInterval(tickTimer);
+  const step = () => {
+    const f = focusState();
+    updateFocusPill();
+    if (!f) { clearInterval(tickTimer); return; }
+    const remain = f.minutes * 60000 - focusElapsed(f);
+    const el = document.querySelector("[data-timer]");
+    if (el) el.textContent = fmtClock(Math.max(0, remain));
+    const ring = document.querySelector(".focus-ring.live");
+    if (ring) ring.style.setProperty("--p", Math.min(100, focusElapsed(f) / (f.minutes * 600)));
+    if (f.startedAt) document.title = `${fmtClock(Math.max(0, remain))} · Focus`;
+    if (remain <= 0 && f.startedAt) {
+      clearInterval(tickTimer);
+      toast("Time's up. Nice focus session!");
+      focusFinish();
+    }
+  };
+  step();
+  tickTimer = setInterval(step, 1000);
+}
+
+// ------------------------------------------------------------------ command palette (⌘K / Ctrl+K or "/")
+function paletteItems(q) {
+  const cmds = [
+    ["Go to dashboard", "home", () => { location.hash = "dashboard"; }],
+    ["Go to assignments", "list", () => { location.hash = "assignments"; }],
+    ["Go to schedule", "calendar", () => { location.hash = "schedule"; }],
+    ["Go to connections", "plug", () => { location.hash = "connections"; }],
+    ["Go to settings", "settings", () => { location.hash = "settings"; }],
+    ["Sync all platforms", "refresh", () => syncAll(null)],
+    ["Add an assignment", "plus", () => manualModal()],
+    ["Switch light / dark", "eye", () => {
+      const dark = document.documentElement.dataset.theme === "dark" ||
+        (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+      setPref("theme", dark ? "light" : "dark"); applyTheme();
+    }],
+    ...TONES.map(([k, l]) => [`Tone: ${l}`, "star", () => { setPref("tone", k); applyTheme(); render(); }]),
+  ].map(([label, ic, fn]) => ({ label, ic, fn, kind: "Command" }));
+  const tasks = S.assignments.filter(a => a.status !== "hidden").map(a => ({
+    label: a.title, sub: [a.course, dueText(a.due_at)].filter(Boolean).join(" · "), ic: CAT_ICON[a.category] || "file",
+    fn: () => openAssignment(a.id), kind: isDone(a) ? "Done" : "Assignment", done: isDone(a),
+  }));
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const match = it => words.every(w => `${it.label} ${it.sub || ""}`.toLowerCase().includes(w));
+  if (!words.length) return [...tasks.filter(t => !t.done).slice(0, 6), ...cmds.slice(0, 7)];
+  return [...tasks.filter(match).sort((a, b) => a.done - b.done), ...cmds.filter(match)].slice(0, 12);
+}
+function openPalette() {
+  openModal(`<div class="palette">
+    <div class="palette-input">${icon("search")}<input id="pal-q" placeholder="Search assignments or type a command…" aria-label="Search"><kbd>esc</kbd></div>
+    <div class="palette-list" id="pal-list" role="listbox"></div></div>`);
+  $("#modal").classList.add("modal-palette");
+  let sel = 0, items = [];
+  const draw = () => {
+    items = paletteItems($("#pal-q").value);
+    sel = Math.min(sel, Math.max(0, items.length - 1));
+    $("#pal-list").innerHTML = items.length ? items.map((it, i) => `<div class="pal-item ${i === sel ? "on" : ""} ${it.done ? "done" : ""}" data-i="${i}" role="option" aria-selected="${i === sel}">
+        ${icon(it.ic)}<div class="pal-text"><b>${esc(it.label)}</b>${it.sub ? `<span>${esc(it.sub)}</span>` : ""}</div><em>${it.kind}</em></div>`).join("")
+      : `<div class="empty" style="padding:18px">No matches</div>`;
+    $("#pal-list").querySelector(".on")?.scrollIntoView({ block: "nearest" });
+  };
+  const run = i => { const it = items[i]; if (!it) return; closeModal(); it.fn(); };
+  $("#pal-q").addEventListener("input", () => { sel = 0; draw(); });
+  $("#pal-q").addEventListener("keydown", e => {
+    if (e.key === "ArrowDown") { sel = Math.min(items.length - 1, sel + 1); draw(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { sel = Math.max(0, sel - 1); draw(); e.preventDefault(); }
+    else if (e.key === "Enter") { run(sel); e.preventDefault(); }
+  });
+  $("#pal-list").addEventListener("click", e => { const el = e.target.closest("[data-i]"); if (el) run(+el.dataset.i); });
+  draw();
+}
+document.addEventListener("keydown", e => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
+  if ((e.key === "k" && (e.metaKey || e.ctrlKey)) || (e.key === "/" && !typing && $("#modal-backdrop").hidden)) {
+    e.preventDefault();
+    if ($("#modal-backdrop").hidden) openPalette(); else closeModal();
+  } else if (e.key === "n" && !typing && !e.metaKey && !e.ctrlKey && $("#modal-backdrop").hidden && currentView() === "dashboard") {
+    e.preventDefault(); $("#qa-input")?.focus();
+  }
+});
 
 // ------------------------------------------------------------------ assignments
 function renderAssignments() {
@@ -604,13 +1012,12 @@ function openModal(html) {
   hydrateIcons($("#modal"));
   setTimeout(() => $("#modal").querySelector("input, select, textarea")?.focus(), 30);
 }
-function closeModal() { $("#modal-backdrop").hidden = true; $("#modal").innerHTML = ""; }
+function closeModal() { $("#modal-backdrop").hidden = true; $("#modal").innerHTML = ""; $("#modal").classList.remove("modal-palette"); }
 $("#modal-backdrop").addEventListener("click", e => { if (e.target.id === "modal-backdrop") closeModal(); });
 
 function logo(kind, size = 44) {
-  const st = PLATFORM_STYLE[kind] || PLATFORM_STYLE.manual;
-  const inner = st.letter || icon(kind === "ical" ? "calendar" : kind === "demo" ? "play" : "edit");
-  return `<div class="logo" style="background:${st.color};width:${size}px;height:${size}px">${inner}</div>`;
+  const inner = PLATFORM_LETTER[kind] || icon(kind === "ical" ? "calendar" : kind === "demo" ? "play" : "edit");
+  return `<div class="logo" style="width:${size}px;height:${size}px">${inner}</div>`;
 }
 
 function connectModal(kind, conn) {
@@ -841,7 +1248,7 @@ function weekHTML(plan) {
           `<div class="busy" style="top:${(toMin(b.start) - lo) * PX}px;height:${(toMin(b.end) - toMin(b.start)) * PX}px">${esc(b.label || "Busy")}</div>`).join("");
         const blks = plan.blocks.filter(b => dayDiff(new Date(b.start), d) === 0).map(b => {
           const s = new Date(b.start), e = new Date(b.end), h = Math.max(22, (e - s) / 60000 * PX);
-          return `<div class="blk" data-blk="${b.assignment_id}" style="top:${y(s)}px;height:${h}px;background:${colorFor(b.course)}" title="${esc(b.title)} · ${esc(fmtTime(s))}–${esc(fmtTime(e))}">
+          return `<div class="blk" data-blk="${b.assignment_id}" style="top:${y(s)}px;height:${h}px;${toneVars(b.course)}" title="${esc(b.title)} · ${esc(fmtTime(s))}–${esc(fmtTime(e))}">
             <b>${esc(b.title)}</b>${h > 34 ? `<small>${esc(fmtTime(s))} · ${minutesLabel(b.minutes)}${b.parts > 1 ? ` · ${b.part}/${b.parts}` : ""}</small>` : ""}</div>`;
         }).join("");
         const dues = dueItems.filter(a => dayDiff(new Date(a.due_at), d) === 0 && inRange(new Date(a.due_at))).map(a => {
@@ -865,7 +1272,7 @@ function agendaHTML(plan) {
     const total = blocks.reduce((s, b) => s + b.minutes, 0);
     return `<div class="agenda-day"><h3>${esc(name)} <span class="muted">${esc(d.toLocaleDateString([], { month: "short", day: "numeric" }))} · ${minutesLabel(total)}</span></h3>
       ${blocks.map(b => `<div class="agenda-blk" data-blk="${b.assignment_id}">
-        <span class="bar" style="background:${colorFor(b.course)}"></span>
+        <span class="bar" style="background:var(--tone-${toneFor(b.course)})"></span>
         <div class="tm">${esc(fmtTime(new Date(b.start)))}<div class="muted small" style="font-weight:500">${minutesLabel(b.minutes)}</div></div>
         <div class="bd"><b>${esc(b.title)}</b><span class="muted small">${esc(b.course)}${b.parts > 1 ? ` · part ${b.part} of ${b.parts}` : ""}${b.due_at ? ` · due ${esc(dueText(b.due_at))}` : ""}</span></div>
         ${diff <= 0 ? `<button class="btn btn-sm" data-did="${b.assignment_id}" data-min="${b.minutes}" title="Log this session as done">${icon("check")}Did it</button>` : ""}
@@ -931,7 +1338,7 @@ function availabilityEditor() {
 
 // ------------------------------------------------------------------ settings
 function renderSettings() {
-  const main = $("#main"), ai = S.status.ai, theme = localStorage.getItem("theme") || "auto";
+  const main = $("#main"), ai = S.status.ai, theme = pref("theme", "auto"), tone = pref("tone", "graphite");
   const zones = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [S.settings.timezone || "UTC"];
   main.innerHTML = `
     <div class="page-head"><div><h1>Settings</h1></div></div>
@@ -942,6 +1349,9 @@ function renderSettings() {
         <label class="field">Time zone<select id="s-tz">${zones.map(z => `<option ${z === S.settings.timezone ? "selected" : ""}>${esc(z)}</option>`).join("")}</select></label>
         <div><span class="field" style="display:block;margin-bottom:6px;font-weight:600;font-size:13.5px;color:var(--text-2)">Appearance</span>
           <div class="seg" id="s-theme">${[["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]].map(([k, l]) => `<button data-t="${k}" class="${theme === k ? "on" : ""}">${l}</button>`).join("")}</div></div>
+        <div><span class="field" style="display:block;margin-bottom:6px;font-weight:600;font-size:13.5px;color:var(--text-2)">Tone</span>
+          <div class="tone-picker" id="s-tone">${TONES.map(([k, l]) => `<button data-tone-pick="${k}" class="${tone === k ? "on" : ""}"><span class="tone-dot" data-tone-swatch="${k}"></span>${l}</button>`).join("")}</div>
+          <p class="small muted" style="margin:6px 0 0">The whole app uses shades of one color. Pick the one you like.</p></div>
         <div><button class="btn btn-primary" id="s-save">${icon("check")}Save</button></div>
       </div>
       <div class="card card-pad">
@@ -959,8 +1369,13 @@ function renderSettings() {
     </div>`;
   $("#s-theme").addEventListener("click", e => {
     const t = e.target.dataset?.t; if (!t) return;
-    localStorage.setItem("theme", t); applyTheme();
+    setPref("theme", t); applyTheme();
     main.querySelectorAll("#s-theme button").forEach(b => b.classList.toggle("on", b.dataset.t === t));
+  });
+  $("#s-tone").addEventListener("click", e => {
+    const b = e.target.closest("[data-tone-pick]"); if (!b) return;
+    setPref("tone", b.dataset.tonePick); applyTheme();
+    main.querySelectorAll("[data-tone-pick]").forEach(x => x.classList.toggle("on", x === b));
   });
   $("#s-save").addEventListener("click", e => busy(e.currentTarget, async () => {
     S.settings = await api("PUT", "/api/settings", { student_name: $("#s-name").value.trim(), timezone: $("#s-tz").value });
@@ -971,6 +1386,8 @@ function renderSettings() {
 
 // ------------------------------------------------------------------ boot
 $("#sync-all").addEventListener("click", e => syncAll(e.currentTarget));
+$("#nav-search").addEventListener("click", openPalette);
+$("#focus-pill").addEventListener("click", () => { location.hash = "dashboard"; });
 (async function boot() {
   hydrateIcons();
   $("#main").innerHTML = `<div class="skeleton" style="height:140px"></div><div class="skeleton"></div><div class="skeleton"></div>`;
@@ -982,6 +1399,7 @@ $("#sync-all").addEventListener("click", e => syncAll(e.currentTarget));
       S.plan = await api("GET", "/api/schedule");
     }
     render();
+    if (focusState()) tick();
     // Refresh from the platforms in the background when the last sync is over 30 minutes old.
     const last = S.connections.map(c => c.last_sync).filter(Boolean).sort().pop();
     if (S.connections.some(c => !["manual", "demo"].includes(c.kind)) && (!last || Date.now() - new Date(last) > 30 * 60000)) {
