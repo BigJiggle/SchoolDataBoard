@@ -1,0 +1,6 @@
+# Extra packages for the desktop app (python desktop.py) and for building it (python desktop/build.py).
+pywebview>=5.3
+tzdata
+certifi
+pyinstaller>=6.6
+pillow>=10.3

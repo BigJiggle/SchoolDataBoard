@@ -976,7 +976,7 @@ function coachHTML(c) {
     return `<h3>${icon("sparkles")}AI study coach</h3>
       <p class="muted" style="margin:0 0 12px">Get a plain-English breakdown of what's being asked, the requirements, step-by-step plan, tips and what to ask your teacher. It coaches; it won't do the work for you.</p>
       <button class="btn btn-ai" id="d-ai">${icon("sparkles")}Coach me on this</button>
-      ${ai && !ai.configured ? `<p class="small muted" style="margin:10px 0 0">Needs a Claude API key on the computer running the app (set <code>ANTHROPIC_API_KEY</code>). The game plan and tips below work without it.</p>` : ""}`;
+      ${ai && !ai.configured ? `<p class="small muted" style="margin:10px 0 0">Needs a Claude API key: add one in <a href="#settings">Settings</a>. The game plan and tips below work without it.</p>` : ""}`;
   }
   const list = (items, cls = "", ic = "lightbulb") => items?.length ? `<ul class="tips ${cls}">${items.map(t => `<li>${icon(ic)}<span>${esc(t)}</span></li>`).join("")}</ul>` : "";
   return `<div class="ai-box">
@@ -1357,20 +1357,37 @@ function renderSettings() {
       <div class="card card-pad">
         <h2 style="margin-bottom:8px">${icon("sparkles")} AI study coach</h2>
         ${ai.configured ? `<p class="chip chip-green" style="margin:0 0 8px">${icon("check")}Connected (${esc(ai.model)})</p>
-          <p class="muted" style="margin:0">Open any assignment and press <b>Coach me on this</b>.</p>`
-          : `<p class="muted" style="margin:0">Optional. To turn it on, get an API key from <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>,
-             set <code>ANTHROPIC_API_KEY</code> on the computer running this app, and restart it. Everything else works without it.</p>`}
+          <p class="muted" style="margin:0 0 10px">Open any assignment and press <b>Coach me on this</b>.</p>
+          ${ai.source === "app" ? `<button class="btn btn-sm btn-danger" id="s-key-remove">${icon("trash")}Remove saved key</button>`
+            : `<p class="small muted" style="margin:0">Using the key from this computer's environment.</p>`}`
+          : `<p class="muted" style="margin:0 0 12px">Optional. Get an API key from <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>
+             and paste it here. Everything else works without it.</p>
+          <form class="win" id="s-key-form" style="flex-wrap:nowrap">
+            <input type="password" id="s-key" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+            <button class="btn btn-primary">${icon("check")}Save key</button></form>`}
+        <p class="small muted" style="margin:10px 0 0">The key is stored only on this computer and is only sent to Claude.</p>
       </div>
       <div class="card card-pad">
         <h2 style="margin-bottom:8px">Privacy</h2>
-        <p class="muted" style="margin:0">Everything (assignments, notes and your platform tokens) is stored in a file on the computer running this app
-          (<code>data/schoolboard.db</code>). Tokens are only sent to the platform they belong to. The AI coach sends one assignment's details to Claude when you ask for coaching.</p>
+        <p class="muted" style="margin:0">Everything (assignments, notes and your platform tokens) is stored in one file on this computer:
+          <code class="path">${esc(S.status.data_path || "")}</code>. Tokens are only sent to the platform they belong to. The AI coach sends one assignment's details to Claude when you ask for coaching.</p>
       </div>
     </div>`;
   $("#s-theme").addEventListener("click", e => {
     const t = e.target.dataset?.t; if (!t) return;
     setPref("theme", t); applyTheme();
     main.querySelectorAll("#s-theme button").forEach(b => b.classList.toggle("on", b.dataset.t === t));
+  });
+  $("#s-key-form")?.addEventListener("submit", e => {
+    e.preventDefault();
+    busy(e.submitter, async () => {
+      S.status.ai = await api("PUT", "/api/ai-key", { key: $("#s-key").value });
+      renderSettings(); hydrateIcons(main); toast("Key saved. The AI coach is on.");
+    });
+  });
+  $("#s-key-remove")?.addEventListener("click", e => {
+    if (!confirm("Remove the saved Claude API key?")) return;
+    busy(e.currentTarget, async () => { S.status.ai = await api("DELETE", "/api/ai-key"); renderSettings(); hydrateIcons(main); toast("Key removed."); });
   });
   $("#s-tone").addEventListener("click", e => {
     const b = e.target.closest("[data-tone-pick]"); if (!b) return;

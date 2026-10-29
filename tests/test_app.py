@@ -339,3 +339,19 @@ def test_coach_parses_structured_output(client, monkeypatch):
     assert r.json()["ai_coach"]["estimated_minutes"] == 150
     assert calls["model"] == ai.MODEL and calls["output_config"]["format"]["type"] == "json_schema"
     assert "Write 600 words" in calls["messages"][0]["content"]
+
+
+def test_ai_key_saved_in_app_and_never_returned(client, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(ai, "_env_credentials", lambda: False)
+    assert client.get("/api/status").json()["ai"]["configured"] is False
+    assert client.put("/api/ai-key", json={"key": "not-a-key"}).status_code == 400
+    r = client.put("/api/ai-key", json={"key": "sk-ant-test-123"})
+    assert r.json()["configured"] is True and r.json()["source"] == "app"
+    status = client.get("/api/status").text + client.get("/api/settings").text
+    assert "sk-ant-test-123" not in status
+    assert ai.client().api_key == "sk-ant-test-123"
+    assert client.delete("/api/ai-key").json()["configured"] is False
+    with pytest.raises(ai.AIUnavailable, match="Settings"):
+        ai.client()

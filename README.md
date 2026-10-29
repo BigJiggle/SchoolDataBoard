@@ -47,7 +47,56 @@ One dashboard for all your schoolwork. It connects to the platforms your classes
 |---|---|
 | ![Schedule](docs/schedule.png) | ![Assignment](docs/assignment.png) |
 
-## Run it
+## Desktop app
+
+SchoolBoard runs as a normal desktop app: it opens in its own window with its own Dock/taskbar icon. You don't need a browser, a terminal or Python.
+
+### Download
+
+1. Open the repository on GitHub and go to **Actions → Desktop app**. Open the latest successful run. (Once a version is tagged, use the **Releases** page instead.)
+2. Under **Artifacts**, download the build for your computer:
+   - **Mac with Apple silicon (M1–M4):** `SchoolBoard-macOS-ARM64`
+   - **Intel Mac:** `SchoolBoard-macOS-X64`
+   - **Windows:** `SchoolBoard-Windows-X64`
+3. Unzip it.
+   - **Mac:** drag **SchoolBoard.app** into Applications.
+   - **Windows:** keep **SchoolBoard.exe** wherever you like, for example on the Desktop.
+
+**The first time you open it**, your computer warns you because the app isn't signed with a paid developer certificate:
+
+- **Mac:**
+  1. Double-click the app and press **Done** on the warning.
+  2. Open **System Settings → Privacy & Security** and click **Open Anyway** next to SchoolBoard.
+  3. Confirm. On older macOS you can instead right-click the app → **Open** → **Open**.
+- **Windows:** on the blue SmartScreen box, press **More info → Run anyway**.
+
+After that it opens normally.
+
+### Where your data lives
+
+| | |
+|---|---|
+| macOS | `~/Library/Application Support/SchoolBoard/` |
+| Windows | `%APPDATA%\SchoolBoard\` |
+| Linux | `~/.local/share/SchoolBoard/` |
+
+The data folder holds `schoolboard.db` (assignments, notes and tokens), the window's saved preferences and a log file. Your data survives app updates. To start fresh, delete the folder.
+
+### Turn on the AI study coach
+
+Open **Settings → AI study coach**, paste a Claude API key from [platform.claude.com](https://platform.claude.com) and press **Save key**. The key is stored only on your computer.
+
+### Build it yourself
+
+```bash
+pip install -r requirements.txt -r requirements-desktop.txt
+python desktop.py                  # run the desktop app straight from the source
+python desktop/build.py            # package it for this computer → dist/
+```
+
+`desktop/build.py` packages the app with PyInstaller (a `.app` on macOS, a single `.exe` on Windows). It then runs the packaged app with `--selftest` to check that it starts, serves the dashboard and handles time zones, and finally zips it. GitHub Actions (`.github/workflows/desktop.yml`) runs the same script on macOS and Windows on every push. To redraw the icon, run `python desktop/make_icon.py`.
+
+## Run it in a browser instead (development)
 
 Requires Python 3.10+.
 
@@ -59,24 +108,13 @@ pip install -r requirements.txt
 python run.py                      # opens http://127.0.0.1:8010
 ```
 
-Then go to **Connections** and connect your platform, or press **Load sample data** to look around first.
-
-### Optional: AI study coach
-
-Get an API key from [platform.claude.com](https://platform.claude.com), then set it before starting:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...  # Windows (PowerShell): $env:ANTHROPIC_API_KEY="sk-ant-..."
-python run.py
-```
-
-Everything else works without a key.
+Then go to **Connections** and connect your platform, or press **Load sample data** to look around first. For the AI coach, paste a key in Settings, or set `ANTHROPIC_API_KEY` before starting.
 
 ### Settings (environment variables)
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SCHOOLBOARD_DB` | `data/schoolboard.db` | Where your data is stored (SQLite) |
+| `SCHOOLBOARD_DB` | `data/schoolboard.db` (browser version) | Where your data is stored (SQLite) |
 | `SCHOOLBOARD_MODEL` | `claude-opus-5-5` | Claude model for the coach |
 | `SCHOOLBOARD_EFFORT` | `medium` | Coach effort (`low`…`max`) |
 | `SCHOOLBOARD_FALLBACKS` | `1` | Server-side refusal fallback (`0` to turn off) |
@@ -100,12 +138,14 @@ Calendar feeds can include things that aren't assignments, such as class meeting
 
 ## Privacy
 
-Your assignments, notes and platform tokens are stored only in `data/schoolboard.db` on the computer running the app. The server listens on `127.0.0.1` by default, and tokens are never sent back to the browser. Each token is only sent to the platform it belongs to. The AI coach sends a single assignment's details to Claude, and only when you press **Coach me on this**.
+Your assignments, notes, platform tokens and Claude key are stored only on your computer (see [Where your data lives](#where-your-data-lives)). The app's internal server only listens on `127.0.0.1`, so nothing else on your network can reach it, and saved tokens and keys are never sent back to the page. Each token is only sent to the platform it belongs to. The AI coach sends a single assignment's details to Claude, and only when you press **Coach me on this**.
 
 ## Project layout
 
 ```
-run.py                  start the server
+desktop.py              desktop app: starts the server inside the app and opens the window
+desktop/                build script, icon
+run.py                  start the server for the browser version
 app/main.py             FastAPI routes
 app/connectors/         canvas, schoology, moodle, ical (any platform), demo
 app/tips.py             built-in categories, time estimates, steps, tips, submission guidance

@@ -261,8 +261,25 @@ DEFAULT_SETTINGS = {
 def get_settings() -> dict:
     s = dict(DEFAULT_SETTINGS)
     for r in db().execute("SELECT key, value FROM settings"):
-        s[r["key"]] = json.loads(r["value"])
+        if r["key"] in DEFAULT_SETTINGS:
+            s[r["key"]] = json.loads(r["value"])
     return s
+
+
+# Secrets live beside the settings but are never part of get_settings(), so they never reach the browser.
+def get_secret(name: str) -> str:
+    r = db().execute("SELECT value FROM settings WHERE key = ?", (f"_secret:{name}",)).fetchone()
+    return json.loads(r["value"]) if r else ""
+
+
+def set_secret(name: str, value: str):
+    with _lock:
+        if value:
+            db().execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                         (f"_secret:{name}", json.dumps(value)))
+        else:
+            db().execute("DELETE FROM settings WHERE key = ?", (f"_secret:{name}",))
+        db().commit()
 
 
 def save_settings(values: dict):

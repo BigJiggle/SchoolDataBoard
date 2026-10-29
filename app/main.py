@@ -27,7 +27,8 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 @app.get("/api/status")
 def status():
-    return {"ai": ai.status(), "platforms": connectors.describe(), "settings": db.get_settings()}
+    return {"ai": ai.status(), "platforms": connectors.describe(), "settings": db.get_settings(),
+            "data_path": os.path.abspath(db.DB_PATH)}
 
 
 # ------------------------------------------------------------------ connections
@@ -301,6 +302,25 @@ def coach(aid: int):
         raise HTTPException(503, str(e)) from e
     db.update_assignment(aid, ai_coach=result)
     return _enrich(_get(aid), full=True)
+
+
+class AIKeyIn(BaseModel):
+    key: str
+
+
+@app.put("/api/ai-key")
+def save_ai_key(body: AIKeyIn):
+    key = body.key.strip()
+    if not key.startswith("sk-ant-"):
+        raise HTTPException(400, "That doesn't look like a Claude API key (they start with sk-ant-).")
+    db.set_secret("anthropic_api_key", key)
+    return ai.status()
+
+
+@app.delete("/api/ai-key")
+def remove_ai_key():
+    db.set_secret("anthropic_api_key", "")
+    return ai.status()
 
 
 # ------------------------------------------------------------------ settings & schedule

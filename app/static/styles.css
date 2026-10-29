@@ -417,6 +417,8 @@ ul.tips.check-list li svg { color: var(--green); }
   animation: shimmer 1.2s infinite; border-radius: 10px; height: 54px; margin: 8px 0; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
+code.path { overflow-wrap: anywhere; font-size: 12.5px; }
+
 /* ------------------------------------------------------------ dashboard */
 .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .dash-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }

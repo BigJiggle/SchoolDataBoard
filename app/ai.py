@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import anthropic
 from pydantic import BaseModel, Field
 
+from . import db
 from .htmlclean import to_text
 
 MODEL = os.environ.get("SCHOOLBOARD_MODEL", "claude-opus-5-5")
@@ -14,6 +15,7 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 _use_fallbacks = os.environ.get("SCHOOLBOARD_FALLBACKS", "1") != "0"
 
 _client = None
+_client_key = None
 
 
 class AIUnavailable(Exception):
@@ -46,20 +48,30 @@ SYSTEM = (
 )
 
 
+def _env_credentials() -> bool:
+    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+                or os.path.isdir(os.path.expanduser("~/.config/anthropic")))
+
+
 def client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
+    """A key saved in Settings wins; otherwise the SDK's own credential lookup (env var, `ant auth login`)."""
+    global _client, _client_key
+    key = db.get_secret("anthropic_api_key")
+    if _client is None or key != _client_key:
+        if not key and not _env_credentials():
+            raise AIUnavailable("Add your Claude API key in Settings to use the coach.")
         try:
-            _client = anthropic.Anthropic()
-        except Exception as e:  # missing credentials etc.
-            raise AIUnavailable(f"Claude isn't set up: {e}. Set ANTHROPIC_API_KEY and restart.") from e
+            _client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+            _client_key = key
+        except Exception as e:  # unusable credentials etc.
+            raise AIUnavailable(f"Claude isn't set up: {e}. Add your API key in Settings.") from e
     return _client
 
 
 def status() -> dict:
-    has_creds = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-                     or os.path.isdir(os.path.expanduser("~/.config/anthropic")))
-    return {"configured": has_creds, "model": MODEL}
+    saved = bool(db.get_secret("anthropic_api_key"))
+    return {"configured": saved or _env_credentials(), "source": "app" if saved else "environment" if _env_credentials() else None,
+            "model": MODEL}
 
 
 def _extra() -> dict:
@@ -71,7 +83,7 @@ def _extra() -> dict:
 
 def _friendly(err: Exception) -> str:
     if isinstance(err, anthropic.AuthenticationError) or "authentication method" in str(err):
-        return "The Claude API key is missing or invalid. Set ANTHROPIC_API_KEY and restart."
+        return "The Claude API key is missing or invalid. Check it in Settings."
     if isinstance(err, anthropic.RateLimitError):
         return "Claude is rate limited right now; try again in a minute."
     if isinstance(err, anthropic.APIConnectionError):
