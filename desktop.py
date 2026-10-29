@@ -73,7 +73,9 @@ def start_server(port: int):
 
     from app.main import app
 
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False))
+    # log_config=None: uvicorn's own console logging setup fails in a windowed app, which has no console.
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False,
+                                           log_config=None))
     threading.Thread(target=server.run, daemon=True).start()
     deadline = time.time() + 20
     while not server.started:
@@ -83,15 +85,30 @@ def start_server(port: int):
     return server
 
 
-def _quiet_streams(folder: str):
+def _quiet_streams(log_path: str):
     """A windowed build has no console: send output to a log file instead of crashing on a missing stream."""
     if sys.stdout is None or sys.stderr is None or getattr(sys, "frozen", False):
-        log = open(os.path.join(folder, "schoolboard.log"), "a", buffering=1, encoding="utf-8")
-        sys.stdout = sys.stdout or log
+        log = open(log_path, "a", buffering=1, encoding="utf-8")
+        sys.stdout = log
         sys.stderr = log
 
 
 def selftest() -> int:
+    """Exits 0 if the app works. Output goes to $SCHOOLBOARD_LOG (the build prints it); a failure never opens a dialog."""
+    _quiet_streams(os.environ.get("SCHOOLBOARD_LOG") or os.path.join(tempfile.gettempdir(), "schoolboard-selftest.log"))
+    try:
+        _selftest()
+    except BaseException:
+        import traceback
+
+        traceback.print_exc()
+        sys.stderr.flush()
+        os._exit(1)
+    sys.stdout.flush()
+    os._exit(0)  # don't wait on the server thread
+
+
+def _selftest():
     from zoneinfo import ZoneInfo
 
     ZoneInfo("America/New_York")  # raises if the packaged app is missing its time-zone data
@@ -115,16 +132,14 @@ def selftest() -> int:
         assert json.loads(_get(base + "/api/schedule"))["blocks"]
     finally:
         server.should_exit = True
-    if sys.stdout:  # a windowed Windows build has no console to print to
-        print("selftest ok")
-    return 0
+    print("selftest ok")
 
 
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
     folder = data_dir()
-    _quiet_streams(folder)
+    _quiet_streams(os.path.join(folder, "schoolboard.log"))
     os.environ.setdefault("SCHOOLBOARD_DB", os.path.join(folder, "schoolboard.db"))
 
     import webview

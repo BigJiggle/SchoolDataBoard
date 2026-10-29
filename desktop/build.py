@@ -70,7 +70,20 @@ def package(target: str) -> str:
     return shutil.make_archive(out, "gztar", DIST, "SchoolBoard")
 
 
+def selftest(target: str):
+    """Runs the packaged app's self-test and shows what it logged (a windowed app has no console of its own)."""
+    log = os.path.join(DIST, "selftest.log")
+    if os.path.exists(log):
+        os.remove(log)
+    try:
+        run([executable(target), "--selftest"], timeout=180, env={**os.environ, "SCHOOLBOARD_LOG": log})
+    finally:
+        if os.path.exists(log):
+            print("---- selftest log ----\n" + open(log, encoding="utf-8").read().strip(), flush=True)
+            os.remove(log)  # keep it out of the zip
+
+
 if __name__ == "__main__":
     target = build()
-    run([executable(target), "--selftest"], timeout=180)
+    selftest(target)
     print("built", package(target))
